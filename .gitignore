@@ -1,0 +1,8 @@
+# Configurazione locale con credenziali (PAT): mai su git
+config/
+config/.env
+.env
+*.env
+
+__pycache__/
+*.pyw.new

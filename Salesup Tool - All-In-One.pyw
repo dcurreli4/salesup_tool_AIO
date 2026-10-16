@@ -13,7 +13,7 @@ import json
 from base64 import b64encode
 from pathlib import Path
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 # Repository GitHub ("owner/repo") da cui leggere le release; vuoto = nessun controllo
 _UPDATE_REPO = "dcurreli4/salesup_tool_AIO"
@@ -867,14 +867,8 @@ def _mdc_load_files() -> list:
 
 def _docx_to_markdown(path: Path) -> str:
     """Converte un .docx in Markdown: .docx → HTML (mammoth) → Markdown.
-    Mammoth produce HTML semantico (grassetti, liste, tabelle); qui lo
-    traduciamo in Markdown pulito, adatto a essere letto da un'AI.
-
-    Nota: in molti .docx i titoli non sono veri heading ma elementi di
-    lista numerata con solo testo in grassetto (es. "1. Overview"). Questi
-    vengono riconosciuti e promossi a heading Markdown (## Titolo), così la
-    struttura del documento resta leggibile; le liste vere mantengono una
-    numerazione sequenziale corretta."""
+    Mammoth produce HTML semantico (titoli, grassetti, liste, tabelle); qui
+    lo traduciamo in Markdown pulito, adatto a essere letto da un'AI."""
     import mammoth
     import re
     from html.parser import HTMLParser
@@ -886,14 +880,13 @@ def _docx_to_markdown(path: Path) -> str:
     class _MdWriter(HTMLParser):
         def __init__(self):
             super().__init__(convert_charrefs=True)
-            self.out = []          # blocchi (tipo, testo) di output
-            self._buf = []         # testo del blocco corrente (non-lista)
+            self.out = []          # righe/blocchi di output
+            self._buf = []         # testo del blocco corrente
+            self._inline = []      # stack marcatori inline (**/_)
+            self._list_stack = []  # ("ul"|"ol", contatore)
             self._in_pre = False
-            # liste: ogni livello è un dict con tipo, contatore e voci bufferizzate
-            self._lists = []       # stack di liste aperte
-            self._li_stack = []    # stack di <li> aperti: {"buf":[], "only_strong":bool}
             # tabelle
-            self._table = None
+            self._table = None     # lista di righe, ogni riga lista di celle
             self._row = None
             self._cell = None
 
@@ -907,8 +900,6 @@ def _docx_to_markdown(path: Path) -> str:
         def _emit_text(self, data):
             if self._cell is not None:
                 self._cell.append(data)
-            elif self._li_stack:
-                self._li_stack[-1]["buf"].append(data)
             else:
                 self._buf.append(data)
 
@@ -921,9 +912,16 @@ def _docx_to_markdown(path: Path) -> str:
             elif tag == "br":
                 self._emit_text("  \n")
             elif tag in ("ul", "ol"):
-                self._lists.append({"kind": tag, "n": 0, "items": []})
+                self._list_stack.append([tag, 0])
             elif tag == "li":
-                self._li_stack.append({"buf": [], "only_strong": True})
+                if self._list_stack:
+                    kind, n = self._list_stack[-1]
+                    indent = "  " * (len(self._list_stack) - 1)
+                    if kind == "ol":
+                        self._list_stack[-1][1] = n + 1
+                        self._buf.append(f"{indent}{n + 1}. ")
+                    else:
+                        self._buf.append(f"{indent}- ")
             elif tag == "table":
                 self._table = []
             elif tag == "tr":
@@ -931,19 +929,16 @@ def _docx_to_markdown(path: Path) -> str:
             elif tag in ("td", "th"):
                 self._cell = []
             elif tag == "a":
-                self._href = dict(attrs).get("href", "")
+                d = dict(attrs)
+                self._href = d.get("href", "")
                 self._emit_text("[")
             elif tag == "img":
                 d = dict(attrs)
-                self._emit_text(f"![{d.get('alt', '')}]({d.get('src', '')})")
+                alt = d.get("alt", "")
+                self._emit_text(f"![{alt}]({d.get('src', '')})")
             elif tag == "pre":
                 self._in_pre = True
                 self._buf.append("```\n")
-
-            # traccia se il <li> corrente è "solo grassetto" (candidato titolo):
-            # qualsiasi tag che non sia grassetto/lista annidata lo squalifica
-            if self._li_stack and tag not in ("strong", "b", "li", "ol", "ul"):
-                self._li_stack[-1]["only_strong"] = False
 
         # ── tag di chiusura ──
         def handle_endtag(self, tag):
@@ -952,19 +947,15 @@ def _docx_to_markdown(path: Path) -> str:
             elif tag in ("em", "i"):
                 self._emit_text("_")
             elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
-                self._flush(prefix="#" * int(tag[1]) + " ", block="h")
+                level = int(tag[1])
+                self._flush(prefix="#" * level + " ", block="h")
             elif tag == "p":
                 self._flush()
             elif tag == "li":
-                if self._li_stack:
-                    li = self._li_stack.pop()
-                    text = "".join(li["buf"]).strip()
-                    if self._lists:
-                        self._lists[-1]["items"].append(
-                            (text, bool(li["only_strong"])))
+                self._flush(block="li")
             elif tag in ("ul", "ol"):
-                if self._lists:
-                    self._emit_list(self._lists.pop())
+                if self._list_stack:
+                    self._list_stack.pop()
             elif tag == "a":
                 self._emit_text(f"]({getattr(self, '_href', '')})")
             elif tag == "pre":
@@ -987,48 +978,22 @@ def _docx_to_markdown(path: Path) -> str:
             if not data:
                 return
             if not self._in_pre:
+                # comprime spazi/newline interni (HTML li ignora)
                 data = re.sub(r"\s+", " ", data)
                 if data == " " and (not self._buf or self._buf[-1].endswith(" ")):
                     return
             self._emit_text(data)
 
-        # ── emissione liste (con riconoscimento titoli) ──
-        def _emit_list(self, lst):
-            items = lst["items"]
-            depth = len(self._lists)   # 0 = primo livello (già tolta dalla stack)
-
-            # Titolo "travestito": lista NUMERATA di primo livello, un solo
-            # elemento, tutto in grassetto, senza punteggiatura finale da frase.
-            # Es. <ol><li><strong>Overview Generale</strong></li></ol>
-            # (i sotto-elenchi bullet "- Titolo: ..." NON vengono promossi)
-            if (depth == 0 and lst["kind"] == "ol" and len(items) == 1
-                    and items[0][1]):
-                title = items[0][0].strip().strip("*").strip()
-                # esclude le righe che iniziano con etichette tipiche di contenuto
-                if title and not title.lower().startswith(("titolo:", "pr ", "pr:")):
-                    self.out.append(("h", "## " + title))
-                    return
-
-            indent = "  " * depth
-            n = 0
-            for text, _only_strong in items:
-                if not text:
-                    continue
-                if lst["kind"] == "ol":
-                    n += 1
-                    self.out.append(("li", f"{indent}{n}. {text}"))
-                else:
-                    self.out.append(("li", f"{indent}- {text}"))
-
         def _emit_table(self):
             if not self._table:
                 return
             rows = self._table
+            header = rows[0]
             ncol = max(len(r) for r in rows)
             def _row(cells):
                 cells = cells + [""] * (ncol - len(cells))
                 return "| " + " | ".join(c.replace("\n", " ") for c in cells) + " |"
-            self.out.append(("tr", _row(rows[0])))
+            self.out.append(("tr", _row(header)))
             self.out.append(("tr", "| " + " | ".join(["---"] * ncol) + " |"))
             for r in rows[1:]:
                 self.out.append(("tr", _row(r)))
@@ -1047,6 +1012,7 @@ def _docx_to_markdown(path: Path) -> str:
             lines.append(("" if not lines else "\n\n") + text)
         prev_block = block
     md = unescape("".join(lines))
+    # normalizza eccessi di righe vuote
     md = re.sub(r"\n{3,}", "\n\n", md).strip() + "\n"
     return md
 

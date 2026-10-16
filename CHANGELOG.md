@@ -1,3 +1,6 @@
+### v1.0.3 — 2026-10-16
+- **MD Converter — conversione**: ripristinato il comportamento di conversione iniziale, più aderente alla struttura dell'elenco così come definita nel documento Word di partenza
+
 ### v1.0.2 — 2026-10-16
 - **MD Converter — qualità della conversione**: i titoli di sezione che nel documento Word sono numerati vengono riconosciuti e resi come titoli Markdown; gli elenchi numerati mantengono una numerazione progressiva corretta anziché ripartire sempre da uno
 - **MD Converter — pulizia output**: a ogni conversione la cartella di output viene svuotata dai file della conversione precedente, così rimangono solo i risultati più recenti

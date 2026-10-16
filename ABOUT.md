@@ -32,10 +32,15 @@ I file si aggiungono trascinandoli nell'area tratteggiata **📂 Trascina qui** 
 Vengono accettati solo file `.docx`. Quando si trascina o si seleziona qualcosa di diverso, la barra di stato in basso spiega il motivo: formato non accettato (indicando quali sono accettati), cartella ignorata, oppure file già presente in lista. Il controllo dei duplicati si basa sul percorso del file, quindi lo stesso documento non viene aggiunto due volte anche se indicato in modi diversi.
 
 ### Conversione
-Il bottone ▶ avvia la conversione di tutti i file in lista. Per ciascuno viene generato un `.md` con lo stesso nome. La conversione mantiene la struttura del documento: titoli, grassetto, corsivo, elenchi puntati e numerati, tabelle, link e immagini. Il pannello di log mostra l'esito file per file e un riepilogo finale con il numero di documenti convertiti, in errore o saltati.
+Il bottone ▶ avvia la conversione di tutti i file in lista. Per ciascuno viene generato un `.md` con lo stesso nome. La conversione mantiene la struttura del documento: titoli, grassetto, corsivo, elenchi puntati e numerati, tabelle, link e immagini. I titoli di sezione che nel documento Word sono numerati vengono riconosciuti e resi come titoli Markdown, e gli elenchi numerati mantengono una numerazione progressiva corretta. Il pannello di log mostra l'esito file per file e un riepilogo finale con il numero di documenti convertiti, in errore o saltati.
 
 ### Dove finiscono i file
-I file `.md` prodotti vengono salvati in una cartella di output dedicata all'interno del progetto. Al termine della conversione la cartella viene aperta automaticamente.
+I file `.md` prodotti vengono salvati in una cartella di output dedicata all'interno del progetto. A ogni conversione la cartella viene prima svuotata dai file della conversione precedente, così restano solo i risultati più recenti. Al termine la cartella viene aperta automaticamente.
+
+## ℹ About
+
+### Cosa fa
+Mostra la documentazione del tool direttamente nell'interfaccia, insieme alla versione attualmente installata. Si apre dalla voce ℹ About in basso nella sidebar e presenta i contenuti suddivisi per sezione, con scorrimento.
 
 ## ⚙ Impostazioni
 
@@ -56,21 +61,24 @@ Il PAT deve avere almeno gli scope **Project and Team (Read)**, per elencare i p
 ## 🔧 Configurazione
 
 ### File .env
-URL e PAT sono salvati in un file `.env` locale nella cartella `config/`, esclusa da git tramite `.gitignore`: le credenziali non vengono mai pushate sul repository.
+URL e PAT sono salvati in un file `.env` locale nella cartella `config/`, esclusa da git tramite `.gitignore`: le credenziali non vengono mai pushate sul repository. All'avvio, se la cartella e il file non esistono, vengono creati automaticamente (file vuoto), senza sovrascrivere eventuali valori già presenti.
 
 ### Dipendenze
 Le dipendenze esterne sono `requests` (chiamate di rete), `tkinterdnd2` (trascinamento dei file) e `mammoth` (conversione da Word a Markdown). Vengono verificate ad ogni avvio e, se mancano, installate automaticamente tramite pip senza aprire finestre di console. Se l'installazione fallisce viene mostrato il comando da eseguire a mano.
 
 ### Splash screen
-All'avvio una splash screen mostra l'avanzamento: verifica dipendenze, controllo aggiornamenti, caricamento interfaccia.
+All'avvio una splash screen mostra l'avanzamento: verifica dipendenze, preparazione della configurazione, controllo aggiornamenti, caricamento interfaccia.
 
 ## ⬆ Aggiornamenti
 
 ### Controllo automatico
-Ad ogni avvio il tool confronta la propria versione con l'ultima release pubblicata sul repository GitHub del progetto. Se ne trova una più recente mostra il badge **↑ vX.Y.Z** nell'header e apre il popup di aggiornamento.
+Ad ogni avvio il tool confronta la propria versione con l'ultima release pubblicata sul repository GitHub del progetto. Se ne trova una più recente mostra il badge **↑ vX.Y.Z** nell'header e apre il popup di aggiornamento. Il badge compare solo quando è disponibile un aggiornamento; la versione attualmente installata è sempre indicata in fondo alla sidebar.
 
 ### Installazione
-Il bottone **Aggiorna ora** scarica il nuovo file `.pyw` dalla release, sostituisce quello attuale e riavvia il tool. **Più tardi** chiude il popup; il badge resta visibile nell'header per aggiornare in un secondo momento.
+Il bottone **Aggiorna ora** scarica il nuovo file `.pyw` dalla release, sostituisce quello attuale e riavvia il tool. Insieme vengono scaricati anche i file di documentazione (CHANGELOG, ABOUT, README), così restano allineati e vengono creati anche se non erano presenti in locale. **Più tardi** chiude il popup; il badge resta visibile nell'header per aggiornare in un secondo momento.
+
+### Novità dopo l'aggiornamento
+Al primo riavvio dopo un aggiornamento viene mostrato un popup con l'elenco delle novità della versione appena installata, lette dal changelog.
 
 ### Pubblicazione di una nuova versione
 Il rilascio è automatico tramite GitHub Actions (`.github/workflows/release.yml`). Ad ogni push su `main` il workflow legge `VERSION` dal file e, se il tag `v<versione>` non esiste ancora, crea tag e release allegando il `.pyw`. Per pubblicare basta aumentare `VERSION` e fare push; i push con versione invariata non creano release.

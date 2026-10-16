@@ -13,7 +13,7 @@ import json
 from base64 import b64encode
 from pathlib import Path
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 # Repository GitHub ("owner/repo") da cui leggere le release; vuoto = nessun controllo
 _UPDATE_REPO = "dcurreli4/salesup_tool_AIO"
@@ -197,6 +197,21 @@ FONT_MONO_SM = ("Consolas", 8)
 
 # ── Configurazione (.env) ─────────────────────────────────────────────────────
 _ENV = Path(__file__).parent / "config" / ".env"
+
+
+def _ensure_env_file():
+    """Crea la cartella config/ e un .env vuoto se non esistono ancora.
+    Eseguito all'avvio così il file di configurazione è presente fin da subito."""
+    try:
+        _ENV.parent.mkdir(parents=True, exist_ok=True)
+        if not _ENV.exists():
+            _ENV.write_text("", encoding="utf-8")
+    except Exception:
+        pass  # in caso di permessi mancanti l'app prosegue coi default
+
+
+_splash.set("Preparazione configurazione...")
+_ensure_env_file()
 
 _DEFAULT_ORG_URL = "https://dev.azure.com/DevOps-Applications-EGL"
 
@@ -852,8 +867,14 @@ def _mdc_load_files() -> list:
 
 def _docx_to_markdown(path: Path) -> str:
     """Converte un .docx in Markdown: .docx → HTML (mammoth) → Markdown.
-    Mammoth produce HTML semantico (titoli, grassetti, liste, tabelle); qui
-    lo traduciamo in Markdown pulito, adatto a essere letto da un'AI."""
+    Mammoth produce HTML semantico (grassetti, liste, tabelle); qui lo
+    traduciamo in Markdown pulito, adatto a essere letto da un'AI.
+
+    Nota: in molti .docx i titoli non sono veri heading ma elementi di
+    lista numerata con solo testo in grassetto (es. "1. Overview"). Questi
+    vengono riconosciuti e promossi a heading Markdown (## Titolo), così la
+    struttura del documento resta leggibile; le liste vere mantengono una
+    numerazione sequenziale corretta."""
     import mammoth
     import re
     from html.parser import HTMLParser
@@ -865,13 +886,14 @@ def _docx_to_markdown(path: Path) -> str:
     class _MdWriter(HTMLParser):
         def __init__(self):
             super().__init__(convert_charrefs=True)
-            self.out = []          # righe/blocchi di output
-            self._buf = []         # testo del blocco corrente
-            self._inline = []      # stack marcatori inline (**/_)
-            self._list_stack = []  # ("ul"|"ol", contatore)
+            self.out = []          # blocchi (tipo, testo) di output
+            self._buf = []         # testo del blocco corrente (non-lista)
             self._in_pre = False
+            # liste: ogni livello è un dict con tipo, contatore e voci bufferizzate
+            self._lists = []       # stack di liste aperte
+            self._li_stack = []    # stack di <li> aperti: {"buf":[], "only_strong":bool}
             # tabelle
-            self._table = None     # lista di righe, ogni riga lista di celle
+            self._table = None
             self._row = None
             self._cell = None
 
@@ -885,6 +907,8 @@ def _docx_to_markdown(path: Path) -> str:
         def _emit_text(self, data):
             if self._cell is not None:
                 self._cell.append(data)
+            elif self._li_stack:
+                self._li_stack[-1]["buf"].append(data)
             else:
                 self._buf.append(data)
 
@@ -897,16 +921,9 @@ def _docx_to_markdown(path: Path) -> str:
             elif tag == "br":
                 self._emit_text("  \n")
             elif tag in ("ul", "ol"):
-                self._list_stack.append([tag, 0])
+                self._lists.append({"kind": tag, "n": 0, "items": []})
             elif tag == "li":
-                if self._list_stack:
-                    kind, n = self._list_stack[-1]
-                    indent = "  " * (len(self._list_stack) - 1)
-                    if kind == "ol":
-                        self._list_stack[-1][1] = n + 1
-                        self._buf.append(f"{indent}{n + 1}. ")
-                    else:
-                        self._buf.append(f"{indent}- ")
+                self._li_stack.append({"buf": [], "only_strong": True})
             elif tag == "table":
                 self._table = []
             elif tag == "tr":
@@ -914,16 +931,19 @@ def _docx_to_markdown(path: Path) -> str:
             elif tag in ("td", "th"):
                 self._cell = []
             elif tag == "a":
-                d = dict(attrs)
-                self._href = d.get("href", "")
+                self._href = dict(attrs).get("href", "")
                 self._emit_text("[")
             elif tag == "img":
                 d = dict(attrs)
-                alt = d.get("alt", "")
-                self._emit_text(f"![{alt}]({d.get('src', '')})")
+                self._emit_text(f"![{d.get('alt', '')}]({d.get('src', '')})")
             elif tag == "pre":
                 self._in_pre = True
                 self._buf.append("```\n")
+
+            # traccia se il <li> corrente è "solo grassetto" (candidato titolo):
+            # qualsiasi tag che non sia grassetto/lista annidata lo squalifica
+            if self._li_stack and tag not in ("strong", "b", "li", "ol", "ul"):
+                self._li_stack[-1]["only_strong"] = False
 
         # ── tag di chiusura ──
         def handle_endtag(self, tag):
@@ -932,15 +952,19 @@ def _docx_to_markdown(path: Path) -> str:
             elif tag in ("em", "i"):
                 self._emit_text("_")
             elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
-                level = int(tag[1])
-                self._flush(prefix="#" * level + " ", block="h")
+                self._flush(prefix="#" * int(tag[1]) + " ", block="h")
             elif tag == "p":
                 self._flush()
             elif tag == "li":
-                self._flush(block="li")
+                if self._li_stack:
+                    li = self._li_stack.pop()
+                    text = "".join(li["buf"]).strip()
+                    if self._lists:
+                        self._lists[-1]["items"].append(
+                            (text, bool(li["only_strong"])))
             elif tag in ("ul", "ol"):
-                if self._list_stack:
-                    self._list_stack.pop()
+                if self._lists:
+                    self._emit_list(self._lists.pop())
             elif tag == "a":
                 self._emit_text(f"]({getattr(self, '_href', '')})")
             elif tag == "pre":
@@ -963,22 +987,48 @@ def _docx_to_markdown(path: Path) -> str:
             if not data:
                 return
             if not self._in_pre:
-                # comprime spazi/newline interni (HTML li ignora)
                 data = re.sub(r"\s+", " ", data)
                 if data == " " and (not self._buf or self._buf[-1].endswith(" ")):
                     return
             self._emit_text(data)
 
+        # ── emissione liste (con riconoscimento titoli) ──
+        def _emit_list(self, lst):
+            items = lst["items"]
+            depth = len(self._lists)   # 0 = primo livello (già tolta dalla stack)
+
+            # Titolo "travestito": lista NUMERATA di primo livello, un solo
+            # elemento, tutto in grassetto, senza punteggiatura finale da frase.
+            # Es. <ol><li><strong>Overview Generale</strong></li></ol>
+            # (i sotto-elenchi bullet "- Titolo: ..." NON vengono promossi)
+            if (depth == 0 and lst["kind"] == "ol" and len(items) == 1
+                    and items[0][1]):
+                title = items[0][0].strip().strip("*").strip()
+                # esclude le righe che iniziano con etichette tipiche di contenuto
+                if title and not title.lower().startswith(("titolo:", "pr ", "pr:")):
+                    self.out.append(("h", "## " + title))
+                    return
+
+            indent = "  " * depth
+            n = 0
+            for text, _only_strong in items:
+                if not text:
+                    continue
+                if lst["kind"] == "ol":
+                    n += 1
+                    self.out.append(("li", f"{indent}{n}. {text}"))
+                else:
+                    self.out.append(("li", f"{indent}- {text}"))
+
         def _emit_table(self):
             if not self._table:
                 return
             rows = self._table
-            header = rows[0]
             ncol = max(len(r) for r in rows)
             def _row(cells):
                 cells = cells + [""] * (ncol - len(cells))
                 return "| " + " | ".join(c.replace("\n", " ") for c in cells) + " |"
-            self.out.append(("tr", _row(header)))
+            self.out.append(("tr", _row(rows[0])))
             self.out.append(("tr", "| " + " | ".join(["---"] * ncol) + " |"))
             for r in rows[1:]:
                 self.out.append(("tr", _row(r)))
@@ -997,7 +1047,6 @@ def _docx_to_markdown(path: Path) -> str:
             lines.append(("" if not lines else "\n\n") + text)
         prev_block = block
     md = unescape("".join(lines))
-    # normalizza eccessi di righe vuote
     md = re.sub(r"\n{3,}", "\n\n", md).strip() + "\n"
     return md
 
@@ -1005,6 +1054,7 @@ def _docx_to_markdown(path: Path) -> str:
 def md_converter_run_pipeline(file_paths, log, on_done):
     """Converte ogni .docx della lista in un .md dentro output/md converter/."""
     import os
+    import shutil
     try:
         _MDC_OUTPUT.mkdir(parents=True, exist_ok=True)
         if not file_paths:
@@ -1014,6 +1064,21 @@ def md_converter_run_pipeline(file_paths, log, on_done):
 
         log(f"[INFO] Avvio conversione di {len(file_paths)} file", "info")
         log(f"[INFO] Cartella output: {_MDC_OUTPUT}", "info")
+
+        # Svuota la cartella di output dai file della conversione precedente
+        removed = 0
+        for item in _MDC_OUTPUT.iterdir():
+            try:
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+                removed += 1
+            except Exception as e:
+                log(f"[WARN] Impossibile rimuovere {item.name}: {e}", "warn")
+        if removed:
+            log(f"[INFO] Output svuotato: {removed} elemento/i rimosso/i", "info")
+
         ok = err = skip = 0
 
         for fp in file_paths:
@@ -1376,6 +1441,126 @@ class MdConverterPanel(tk.Frame):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# PANNELLO ABOUT
+# ════════════════════════════════════════════════════════════════════════════
+
+class AboutPanel(tk.Frame):
+    """Mostra il contenuto di ABOUT.md con una resa Markdown essenziale."""
+
+    _ABOUT_FILE = Path(__file__).parent / "ABOUT.md"
+
+    def __init__(self, master):
+        super().__init__(master, bg=BG)
+        self._build()
+
+    def _build(self):
+        canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
+        vsb = ttk.Scrollbar(self, orient="vertical", command=canvas.yview,
+                            style="Dark.Vertical.TScrollbar")
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        def _scroll_set(first, last):
+            if float(first) <= 0.0 and float(last) >= 1.0:
+                if vsb.winfo_ismapped():
+                    vsb.pack_forget()
+            else:
+                if not vsb.winfo_ismapped():
+                    vsb.pack(side="right", fill="y", before=canvas)
+            vsb.set(first, last)
+
+        canvas.configure(yscrollcommand=_scroll_set)
+        inner = tk.Frame(canvas, bg=BG)
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner(e=None):
+            canvas.update_idletasks()
+            ch = inner.winfo_reqheight()
+            cv = canvas.winfo_height()
+            canvas.configure(scrollregion=(0, 0, 0, max(ch, cv)))
+        inner.bind("<Configure>", _on_inner)
+        canvas.bind("<Configure>",
+                    lambda e: (canvas.itemconfig(win_id, width=e.width), _on_inner()))
+        canvas.bind("<Enter>", lambda e: canvas.bind_all(
+            "<MouseWheel>", lambda ev: canvas.yview_scroll(-1*(ev.delta//120), "units")))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        self._render(inner)
+
+    def _render(self, inner):
+        import re as _re
+
+        # Intestazione
+        hdr = tk.Frame(inner, bg=BG)
+        hdr.pack(fill="x", padx=40, pady=(30, 0))
+        tk.Label(hdr, text="SalesUp Tool - All-in-one", bg=BG, fg=TEXT_PRI,
+                 font=("Consolas", 16, "bold"), anchor="w").pack(anchor="w")
+
+        sub = tk.Frame(hdr, bg=BG)
+        sub.pack(anchor="w", pady=(2, 0))
+        tk.Label(sub, text=f"v{VERSION}", bg=BG, fg=TEXT_SEC,
+                 font=FONT_MONO).pack(side="left")
+
+        tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=40, pady=(16, 0))
+
+        if not self._ABOUT_FILE.exists():
+            tk.Label(inner, text="ABOUT.md non trovato.", bg=BG, fg=TEXT_SEC,
+                     font=FONT_MONO, padx=40).pack(anchor="w", pady=16)
+            tk.Frame(inner, bg=BG).pack(pady=20)
+            return
+
+        def _text_line(parent, text, fg):
+            parts = _re.split(r'(\*\*[^*]+\*\*)', text)
+            has_bold = any(p.startswith("**") and p.endswith("**") for p in parts)
+            if not has_bold:
+                lbl = tk.Label(parent, text=text, bg=BG_CARD, fg=fg, font=FONT_MONO,
+                               anchor="w", justify="left", wraplength=1)
+                lbl.pack(fill="x", anchor="w", pady=1)
+                last = [0]
+                def _cfg(e, w=lbl, l=last):
+                    if e.width != l[0]:
+                        l[0] = e.width
+                        w.configure(wraplength=e.width)
+                lbl.bind("<Configure>", _cfg)
+            else:
+                t = tk.Text(parent, bg=BG_CARD, fg=fg, font=FONT_MONO, bd=0,
+                            highlightthickness=0, wrap="word", cursor="arrow",
+                            height=1, padx=0, pady=1)
+                t.tag_configure("n", font=FONT_MONO, foreground=fg)
+                t.tag_configure("b", font=FONT_MONO_BOLD, foreground=fg)
+                for part in parts:
+                    if part.startswith("**") and part.endswith("**"):
+                        t.insert("end", part[2:-2], "b")
+                    else:
+                        t.insert("end", part, "n")
+                t.configure(state="disabled")
+                t.pack(fill="x", anchor="w")
+
+        card = None
+        body = None
+        for line in self._ABOUT_FILE.read_text(encoding="utf-8").splitlines():
+            if line.startswith("## "):
+                card = tk.Frame(inner, bg=BG_CARD, bd=0,
+                                highlightthickness=1, highlightbackground=BORDER)
+                card.pack(fill="x", padx=40, pady=(16, 0))
+                tk.Label(card, text=line[3:].strip(), bg=BG_CARD, fg=TEXT_PRI,
+                         font=("Consolas", 11, "bold"), pady=12, padx=20,
+                         anchor="w").pack(fill="x")
+                tk.Frame(card, bg=BORDER, height=1).pack(fill="x", padx=20)
+                body = tk.Frame(card, bg=BG_CARD)
+                body.pack(fill="x", padx=20, pady=(8, 16))
+            elif line.startswith("### ") and body is not None:
+                tk.Label(body, text=line[4:].strip(), bg=BG_CARD, fg=ACCENT,
+                         font=FONT_MONO_BOLD, anchor="w").pack(fill="x", pady=(10, 2))
+            elif line.startswith("#"):
+                pass
+            elif line.strip() and body is not None:
+                _text_line(body, line.strip(), TEXT_SEC)
+
+        tk.Frame(inner, bg=BG).pack(pady=20)
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # LAUNCHER PRINCIPALE
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1456,6 +1641,74 @@ class AzdoTool(_TkDnD.Tk if _HAS_DND else tk.Tk):
         except Exception:
             pass
 
+    # ── Popup changelog post-aggiornamento ────────────────────────────────────
+
+    def _show_updated_changelog_popup(self, updated_version):
+        """Dopo un aggiornamento, mostra le novità della versione installata
+        leggendo le voci corrispondenti da CHANGELOG.md."""
+        import re as _re
+        cl_file = Path(__file__).parent / "CHANGELOG.md"
+
+        popup = tk.Toplevel(self)
+        popup.title("Aggiornamento completato")
+        popup.configure(bg=BG)
+        popup.resizable(False, False)
+        popup.grab_set()
+        W, H = 560, 440
+        x = self.winfo_x() + (self.winfo_width()  - W) // 2
+        y = self.winfo_y() + (self.winfo_height() - H) // 2
+        popup.geometry(f"{W}x{H}+{x}+{y}")
+
+        outer = tk.Frame(popup, bg=BORDER, bd=1)
+        outer.pack(fill="both", expand=True, padx=1, pady=1)
+        inner = tk.Frame(outer, bg=BG)
+        inner.pack(fill="both", expand=True, padx=1, pady=1)
+
+        tk.Label(inner, text="Aggiornamento completato", bg=BG, fg=TEXT_PRI,
+                 font=("Consolas", 13, "bold")).pack(pady=(18, 2))
+        tk.Label(inner, text=f"Installata la versione v{updated_version}",
+                 bg=BG, fg=TEXT_SEC, font=FONT_MONO).pack(pady=(0, 10))
+        tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(0, 10))
+
+        cl_frame = tk.Frame(inner, bg=BG)
+        cl_frame.pack(fill="both", expand=True, padx=20)
+        vsb = ttk.Scrollbar(cl_frame, style="Dark.Vertical.TScrollbar")
+        vsb.pack(side="right", fill="y")
+        txt = tk.Text(cl_frame, bg=BG, fg=TEXT_SEC, font=FONT_MONO, bd=0,
+                      highlightthickness=0, wrap="word", yscrollcommand=vsb.set)
+        txt.pack(side="left", fill="both", expand=True)
+        vsb.config(command=txt.yview)
+        txt.tag_configure("version", font=("Consolas", 10, "bold"), foreground=TEXT_PRI)
+        txt.tag_configure("bullet",  font=FONT_MONO, foreground=TEXT_SEC)
+        txt.tag_configure("bold",    font=FONT_MONO_BOLD, foreground=TEXT_SEC)
+
+        if cl_file.exists():
+            in_target = False
+            for line in cl_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("### "):
+                    ver = line[4:].strip().split("—")[0].strip().lstrip("v")
+                    in_target = (ver == updated_version)
+                    if in_target:
+                        txt.insert("end", line[4:].strip() + "\n", "version")
+                elif line.startswith("#"):
+                    pass
+                elif line.strip().startswith("- ") and in_target:
+                    for part in _re.split(r'(\*\*[^*]+\*\*)', line.strip()):
+                        if part.startswith("**") and part.endswith("**"):
+                            txt.insert("end", part[2:-2], "bold")
+                        else:
+                            txt.insert("end", part, "bullet")
+                    txt.insert("end", "\n")
+        else:
+            txt.insert("end", "Nessun changelog disponibile.", "bullet")
+        txt.configure(state="disabled")
+
+        tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(10, 0))
+        tk.Button(inner, text="Chiudi", command=popup.destroy,
+                  bg=ACCENT, fg="#ffffff", font=("Consolas", 10, "bold"),
+                  relief="flat", padx=18, pady=6, cursor="hand2",
+                  activebackground=ACCENT, activeforeground="#ffffff").pack(pady=12)
+
     # ── Header ────────────────────────────────────────────────────────────────
 
     def _build_header(self, parent):
@@ -1468,10 +1721,9 @@ class AzdoTool(_TkDnD.Tk if _HAS_DND else tk.Tk):
                                    font=("Consolas", 15, "bold"), anchor="w")
         self._hdr_title.pack(anchor="w")
 
-        self._hdr_version = tk.Label(hdr, text=f"v{VERSION}", bg=BG,
-                                     fg=TEXT_SEC, font=FONT_MONO_SM, padx=8)
-        self._hdr_version.pack(side="right", anchor="center")
-
+        # In alto a destra compare solo il badge di aggiornamento, e solo
+        # quando è disponibile una nuova versione. La versione corrente resta
+        # visibile in fondo alla sidebar.
         if _UPDATE_INFO:
             badge = tk.Label(hdr, text=f"↑ v{_UPDATE_INFO[0]}", bg=ACCENT, fg="#ffffff",
                              font=FONT_MONO_BOLD, padx=10, pady=3, cursor="hand2")
@@ -1563,6 +1815,7 @@ class AzdoTool(_TkDnD.Tk if _HAS_DND else tk.Tk):
         bottom_nav = tk.Frame(sb, bg=_SB_BG)
         bottom_nav.pack(side="bottom", fill="x")
         self._make_nav_item(bottom_nav, "settings", "⚙", "Impostazioni", bg=_SB_BG)
+        self._make_nav_item(bottom_nav, "about", "ℹ", "About", bg=_SB_BG)
 
     def _make_nav_item(self, parent, key, icon_text, label_text, bg=_SB_ITEM_BG):
         btn_frame = tk.Frame(parent, bg=bg, cursor="hand2")
@@ -1632,6 +1885,8 @@ class AzdoTool(_TkDnD.Tk if _HAS_DND else tk.Tk):
                 frame = MdConverterPanel(self._content)
             elif key == "settings":
                 frame = SettingsPanel(self._content)
+            elif key == "about":
+                frame = AboutPanel(self._content)
             else:
                 frame = tk.Frame(self._content, bg=BG)
                 tk.Label(frame, text=f"Sezione '{key}' — coming soon",
@@ -1642,7 +1897,7 @@ class AzdoTool(_TkDnD.Tk if _HAS_DND else tk.Tk):
             self._frames[key].pack(fill="both", expand=True)
 
         titles = {"branches": "Branches", "mdconverter": "MD Converter",
-                  "settings": "Impostazioni"}
+                  "settings": "Impostazioni", "about": "About"}
         self._hdr_title.configure(text=titles.get(key, key.title()))
 
 
@@ -1693,11 +1948,33 @@ def _show_update_dialog(app):
             resp = requests.get(url, timeout=60, stream=True)
             resp.raise_for_status()
             current = Path(__file__).resolve()
+            here = current.parent
             tmp = current.with_suffix(".pyw.new")
             with open(tmp, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     f.write(chunk)
             shutil.move(str(tmp), str(current))
+
+            # Scarica anche i file di documentazione dalla stessa release/repo,
+            # così restano allineati e vengono creati se non presenti localmente
+            if _UPDATE_REPO:
+                for md_name in ("CHANGELOG.md", "ABOUT.md", "README.md"):
+                    try:
+                        md_resp = requests.get(
+                            f"https://raw.githubusercontent.com/{_UPDATE_REPO}/main/{md_name}",
+                            timeout=10)
+                        if md_resp.ok:
+                            (here / md_name).write_bytes(md_resp.content)
+                    except Exception:
+                        pass  # un md non scaricato non blocca l'aggiornamento
+
+            # Flag per mostrare il changelog della nuova versione al riavvio
+            try:
+                _ENV.parent.mkdir(parents=True, exist_ok=True)
+                (_ENV.parent / ".updated").write_text(latest, encoding="utf-8")
+            except Exception:
+                pass
+
             status_var.set("Aggiornato. Riavvio in corso...")
             popup.update()
             subprocess.Popen([sys.executable, str(current)])
@@ -1731,6 +2008,18 @@ if __name__ == "__main__":
     app.attributes("-topmost", True)
     app.after(200, lambda: app.attributes("-topmost", False))
     app.focus_force()
-    if _UPDATE_INFO:
+
+    # Popup changelog dopo un aggiornamento (flag scritto durante l'update)
+    _updated_flag = _ENV.parent / ".updated"
+    if _updated_flag.exists():
+        try:
+            _updated_version = _updated_flag.read_text(encoding="utf-8").strip()
+            _updated_flag.unlink()
+        except Exception:
+            _updated_version = ""
+        if _updated_version:
+            app.after(600, lambda v=_updated_version: app._show_updated_changelog_popup(v))
+    elif _UPDATE_INFO:
         app.after(500, lambda: _show_update_dialog(app))
+
     app.mainloop()

@@ -13,6 +13,7 @@ Doppio clic su `Salesup Tool - All-In-One.pyw` (nessuna console). Le dipendenze 
 | **DevOps** | Branches | Elenca i branch di tutti i repository di un progetto Azure DevOps, con evidenza del branch di default, ricerca per nome e filtro per repository |
 | **Files** | MD Converter | Converte documenti Word (`.docx`) in Markdown (`.md`) mantenendo titoli, formattazione, elenchi e tabelle; lista con drag & drop e output in cartella dedicata |
 | | Impostazioni | Configurazione di Organization URL e Personal Access Token, con verifica della connessione prima del salvataggio |
+| | About | Documentazione del tool e versione corrente, consultabili direttamente nell'interfaccia |
 
 ## Configurazione
 

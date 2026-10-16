@@ -1,3 +1,12 @@
+### v1.0.2 — 2026-10-16
+- **MD Converter — qualità della conversione**: i titoli di sezione che nel documento Word sono numerati vengono riconosciuti e resi come titoli Markdown; gli elenchi numerati mantengono una numerazione progressiva corretta anziché ripartire sempre da uno
+- **MD Converter — pulizia output**: a ogni conversione la cartella di output viene svuotata dai file della conversione precedente, così rimangono solo i risultati più recenti
+- **Configurazione**: all'avvio, se la cartella di configurazione e il file `.env` non esistono, vengono creati automaticamente (file vuoto, senza sovrascrivere eventuali impostazioni già presenti)
+- **Aggiornamenti**: con l'aggiornamento vengono ora scaricati anche i file di documentazione (CHANGELOG, ABOUT, README), così restano allineati e vengono creati anche se non presenti in locale
+- **Aggiornamenti — changelog post-update**: dopo un aggiornamento, al riavvio viene mostrato un popup con le novità della versione appena installata
+- **About**: nuova sezione nella sidebar (in basso) che mostra la documentazione del tool e la versione corrente
+- **Header**: in alto a destra il badge di versione compare solo quando è disponibile un aggiornamento; la versione corrente resta indicata in fondo alla sidebar
+
 ### v1.0.1 — 2026-10-16
 - **Rebranding**: l'applicazione è stata rinominata da "DevOps Tool" a **SalesUp Tool - All-in-one** — aggiornati titolo finestra, logo, splash screen, AppUserModelID e chiavi di configurazione (`SALESUP_ORG_URL`, `SALESUP_PAT`)
 - **Navigazione**: la sidebar è ora organizzata in macro-sezioni collassabili — **DevOps** (che contiene Branches) e **Files** (che contiene MD Converter)

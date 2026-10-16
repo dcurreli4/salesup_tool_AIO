@@ -1,6 +1,6 @@
-# DevOps Tool - All-in-one
+# SalesUp Tool - All-in-one
 
-Applicazione desktop Windows per consultare Azure DevOps da un'unica interfaccia dark-themed, con la stessa estetica di HUB Tool. Al momento permette di visualizzare tutti i branch dei repository di un progetto; la sidebar è predisposta per aggiungere altri strumenti.
+Applicazione desktop Windows che raccoglie più strumenti in un'unica interfaccia dark-themed. La sidebar è organizzata in macro-sezioni collassabili: **DevOps**, con lo strumento Branches per consultare Azure DevOps, e **Files**, con lo strumento MD Converter per trasformare documenti Word in Markdown.
 
 ## Avvio
 
@@ -8,10 +8,11 @@ Doppio clic su `Salesup Tool - All-In-One.pyw` (nessuna console). Le dipendenze 
 
 ## Strumenti disponibili
 
-| Strumento | Descrizione |
-|-----------|-------------|
-| **Branches** | Elenca i branch di tutti i repository di un progetto Azure DevOps, con evidenza del branch di default, ricerca per nome e filtro per repository |
-| **Impostazioni** | Configurazione di Organization URL e Personal Access Token, con verifica della connessione prima del salvataggio |
+| Sezione | Strumento | Descrizione |
+|---------|-----------|-------------|
+| **DevOps** | Branches | Elenca i branch di tutti i repository di un progetto Azure DevOps, con evidenza del branch di default, ricerca per nome e filtro per repository |
+| **Files** | MD Converter | Converte documenti Word (`.docx`) in Markdown (`.md`) mantenendo titoli, formattazione, elenchi e tabelle; lista con drag & drop e output in cartella dedicata |
+| | Impostazioni | Configurazione di Organization URL e Personal Access Token, con verifica della connessione prima del salvataggio |
 
 ## Configurazione
 
@@ -38,6 +39,8 @@ Il workflow GitHub Actions crea automaticamente tag e release `v<VERSION>` con i
 ## Dipendenze principali
 
 - `requests` — chiamate alle API REST di Azure DevOps e GitHub
+- `tkinterdnd2` — trascinamento dei file (drag & drop)
+- `mammoth` — conversione da Word a Markdown
 
 ## Requisiti
 

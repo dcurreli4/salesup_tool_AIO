@@ -6,3 +6,7 @@ config/.env
 
 __pycache__/
 *.pyw.new
+
+# Dati di lavoro locali (liste file in input, file prodotti in output)
+input/
+output/

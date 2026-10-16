@@ -1,6 +1,8 @@
-# DevOps Tool - All-in-one
+# SalesUp Tool - All-in-one
 
-## ⎇ Branches
+La sidebar è organizzata in macro-sezioni collassabili: ogni intestazione si apre e si chiude con un clic, mostrando gli strumenti al suo interno. Attualmente sono presenti la sezione **DevOps** (strumento Branches) e la sezione **Files** (strumento MD Converter). La voce ⚙ Impostazioni resta in basso.
+
+## 🔧 DevOps — ⎇ Branches
 
 ### Cosa fa
 Mostra tutti i branch dei repository di un progetto Azure DevOps in un'unica schermata, senza dover aprire i repository uno alla volta dal portale.
@@ -17,6 +19,23 @@ Ogni repository è una sezione collassabile (clic sull'intestazione) con il nume
 **Ricerca** — Il campo 🔍 filtra i branch per nome in tempo reale (non distingue maiuscole e minuscole). I repository senza branch corrispondenti vengono nascosti.
 
 **Repository** — Il menu a tendina permette di mostrare un solo repository oppure tutti.
+
+## 📁 Files — 📄 MD Converter
+
+### Cosa fa
+Converte documenti Word (`.docx`) in file Markdown (`.md`), un formato testuale più leggero e più facile da leggere per gli strumenti di intelligenza artificiale.
+
+### Come si aggiungono i file
+I file si aggiungono trascinandoli nell'area tratteggiata **📂 Trascina qui** oppure cliccandola per sceglierli da una finestra di selezione. Ogni file compare come riga nella lista, con una ✕ a sinistra per rimuoverlo singolarmente; il cestino 🗑 in alto svuota l'intera lista. La lista viene ricordata tra un avvio e l'altro.
+
+### Controlli sui file
+Vengono accettati solo file `.docx`. Quando si trascina o si seleziona qualcosa di diverso, la barra di stato in basso spiega il motivo: formato non accettato (indicando quali sono accettati), cartella ignorata, oppure file già presente in lista. Il controllo dei duplicati si basa sul percorso del file, quindi lo stesso documento non viene aggiunto due volte anche se indicato in modi diversi.
+
+### Conversione
+Il bottone ▶ avvia la conversione di tutti i file in lista. Per ciascuno viene generato un `.md` con lo stesso nome. La conversione mantiene la struttura del documento: titoli, grassetto, corsivo, elenchi puntati e numerati, tabelle, link e immagini. Il pannello di log mostra l'esito file per file e un riepilogo finale con il numero di documenti convertiti, in errore o saltati.
+
+### Dove finiscono i file
+I file `.md` prodotti vengono salvati in una cartella di output dedicata all'interno del progetto. Al termine della conversione la cartella viene aperta automaticamente.
 
 ## ⚙ Impostazioni
 
@@ -40,7 +59,7 @@ Il PAT deve avere almeno gli scope **Project and Team (Read)**, per elencare i p
 URL e PAT sono salvati in un file `.env` locale nella cartella `config/`, esclusa da git tramite `.gitignore`: le credenziali non vengono mai pushate sul repository.
 
 ### Dipendenze
-L'unica dipendenza esterna è `requests`. Viene verificata ad ogni avvio e, se manca, installata automaticamente tramite pip senza aprire finestre di console. Se l'installazione fallisce viene mostrato il comando da eseguire a mano.
+Le dipendenze esterne sono `requests` (chiamate di rete), `tkinterdnd2` (trascinamento dei file) e `mammoth` (conversione da Word a Markdown). Vengono verificate ad ogni avvio e, se mancano, installate automaticamente tramite pip senza aprire finestre di console. Se l'installazione fallisce viene mostrato il comando da eseguire a mano.
 
 ### Splash screen
 All'avvio una splash screen mostra l'avanzamento: verifica dipendenze, controllo aggiornamenti, caricamento interfaccia.

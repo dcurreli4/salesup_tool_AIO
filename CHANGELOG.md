@@ -1,3 +1,10 @@
+### v1.0.1 — 2026-10-16
+- **Rebranding**: l'applicazione è stata rinominata da "DevOps Tool" a **SalesUp Tool - All-in-one** — aggiornati titolo finestra, logo, splash screen, AppUserModelID e chiavi di configurazione (`SALESUP_ORG_URL`, `SALESUP_PAT`)
+- **Navigazione**: la sidebar è ora organizzata in macro-sezioni collassabili — **DevOps** (che contiene Branches) e **Files** (che contiene MD Converter)
+- **MD Converter**: nuovo strumento nella sezione Files che converte file Word (`.docx`) in Markdown (`.md`) — lista file con drag & drop, controllo del formato e dei duplicati tramite percorso, rimozione singola o totale, pannello di log e barra di stato
+- **MD Converter**: la conversione preserva la struttura del documento (titoli, grassetto, corsivo, liste puntate e numerate, tabelle, link e immagini) producendo Markdown pulito; i file generati vengono salvati in `output/md converter/` e la cartella viene aperta al termine
+- **Dipendenze**: aggiunte `tkinterdnd2` (drag & drop) e `mammoth` (conversione Word→Markdown), installate automaticamente all'avvio
+
 ### v1.0.0 — 2026-10-02
 - **Branches**: visualizzazione di tutti i branch dei repository di un progetto Azure DevOps — connessione all'organizzazione, selezione progetto, sezioni collassabili per repository, evidenziazione del branch di default
 - **Branches**: ricerca branch per nome in tempo reale e filtro per singolo repository

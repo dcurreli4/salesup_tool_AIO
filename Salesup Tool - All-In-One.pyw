@@ -1,5 +1,5 @@
 """
-Salesup Tool - All-In-One.pyw  —  DevOps Tool - All-in-one
+Salesup Tool - All-In-One.pyw  —  SalesUp Tool - All-in-one
 Doppio clic per avviare su Windows (nessuna console).
 """
 
@@ -7,18 +7,19 @@ import importlib
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import threading
 import json
 from base64 import b64encode
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # Repository GitHub ("owner/repo") da cui leggere le release; vuoto = nessun controllo
 _UPDATE_REPO = "dcurreli4/salesup_tool_AIO"
 
-_REQUIRED = {"requests": "requests"}
+_REQUIRED = {"requests": "requests", "tkinterdnd2": "tkinterdnd2",
+             "mammoth": "mammoth"}
 
 # ── Splash screen ─────────────────────────────────────────────────────────────
 
@@ -41,7 +42,7 @@ class _Splash:
 
         logo = tk.Frame(inner, bg="#0f1117")
         logo.pack(pady=(28, 8))
-        tk.Label(logo, text="DevOps", font=("Consolas", 14, "bold"),
+        tk.Label(logo, text="SalesUp", font=("Consolas", 14, "bold"),
                  fg="#4f8ef7", bg="#0f1117").pack(side="left")
         tk.Label(logo, text="|", font=("Consolas", 14),
                  fg="#2a2d3e", bg="#0f1117", padx=2).pack(side="left")
@@ -121,6 +122,15 @@ def _ensure_dependencies():
 _ensure_dependencies()
 import requests
 
+# Drag & drop opzionale (tkinterdnd2); se assente l'app funziona comunque
+try:
+    from tkinterdnd2 import TkinterDnD as _TkDnD, DND_FILES as _DND_FILES
+    _HAS_DND = True
+except Exception:
+    _TkDnD     = None
+    _DND_FILES = None
+    _HAS_DND   = False
+
 # ── Controllo aggiornamenti ──────────────────────────────────────────────────
 _UPDATE_INFO = None  # (latest_version, download_url) oppure None
 
@@ -192,8 +202,8 @@ _DEFAULT_ORG_URL = "https://dev.azure.com/DevOps-Applications-EGL"
 
 def _azdo_test_connection(values: dict) -> tuple:
     """Ritorna (ok, messaggio) provando a leggere i progetti dell'organizzazione."""
-    org = values.get("DEVOPS_ORG_URL", "").strip().rstrip("/")
-    pat = values.get("DEVOPS_PAT", "").strip()
+    org = values.get("SALESUP_ORG_URL", "").strip().rstrip("/")
+    pat = values.get("SALESUP_PAT", "").strip()
     if not org or not pat:
         return False, "Inserisci URL e PAT"
     token = b64encode(f":{pat}".encode()).decode()
@@ -219,8 +229,8 @@ def _azdo_test_connection(values: dict) -> tuple:
 SETTINGS_TABS = [
     ("⎇  Branches", [
         ("Azure DevOps", [
-            ("DEVOPS_ORG_URL", "Organization URL",      False),
-            ("DEVOPS_PAT",     "Personal Access Token", True),
+            ("SALESUP_ORG_URL", "Organization URL",      False),
+            ("SALESUP_PAT",     "Personal Access Token", True),
         ], _azdo_test_connection),
     ]),
 ]
@@ -259,7 +269,7 @@ def _write_env(data: dict):
 
 
 def _get_org_url() -> str:
-    return (_read_env_raw().get("DEVOPS_ORG_URL") or _DEFAULT_ORG_URL).strip().rstrip("/")
+    return (_read_env_raw().get("SALESUP_ORG_URL") or _DEFAULT_ORG_URL).strip().rstrip("/")
 
 # ── Scrollbar style ───────────────────────────────────────────────────────────
 def _setup_scrollbar_style():
@@ -436,7 +446,7 @@ class BranchesPanel(tk.Frame):
 
     def _on_connect(self):
         org = _get_org_url()
-        pat = _read_env_raw().get("DEVOPS_PAT", "").strip()
+        pat = _read_env_raw().get("SALESUP_PAT", "").strip()
         if not org or not pat:
             self._set_status("✗  Configura URL e PAT in Impostazioni", ERROR_C)
             return
@@ -711,7 +721,7 @@ class SettingsPanel(tk.Frame):
         nb.pack(fill="both", expand=True, padx=20, pady=(12, 0))
 
         env = _read_env_raw()
-        defaults = {"DEVOPS_ORG_URL": _DEFAULT_ORG_URL}
+        defaults = {"SALESUP_ORG_URL": _DEFAULT_ORG_URL}
 
         for tab_label, sections in SETTINGS_TABS:
             tab = tk.Frame(nb, bg=BG)
@@ -821,6 +831,551 @@ class SettingsPanel(tk.Frame):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# PANNELLO MD CONVERTER
+# ════════════════════════════════════════════════════════════════════════════
+
+_MDC_TXT    = Path(__file__).parent / "input"  / "md converter" / "files.txt"
+_MDC_OUTPUT = Path(__file__).parent / "output" / "md converter"
+_MDC_EXT    = {".docx"}
+# Stringa leggibile dei formati accettati, derivata da _MDC_EXT (unica fonte)
+_MDC_EXT_LABEL = ", ".join(sorted(_MDC_EXT))
+
+
+def _mdc_load_files() -> list:
+    if not _MDC_TXT.exists():
+        _MDC_TXT.parent.mkdir(parents=True, exist_ok=True)
+        _MDC_TXT.write_text("", encoding="utf-8")
+        return []
+    return [line.strip() for line in _MDC_TXT.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")]
+
+
+def _docx_to_markdown(path: Path) -> str:
+    """Converte un .docx in Markdown: .docx → HTML (mammoth) → Markdown.
+    Mammoth produce HTML semantico (titoli, grassetti, liste, tabelle); qui
+    lo traduciamo in Markdown pulito, adatto a essere letto da un'AI."""
+    import mammoth
+    import re
+    from html.parser import HTMLParser
+    from html import unescape
+
+    with open(path, "rb") as f:
+        html = mammoth.convert_to_html(f).value
+
+    class _MdWriter(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.out = []          # righe/blocchi di output
+            self._buf = []         # testo del blocco corrente
+            self._inline = []      # stack marcatori inline (**/_)
+            self._list_stack = []  # ("ul"|"ol", contatore)
+            self._in_pre = False
+            # tabelle
+            self._table = None     # lista di righe, ogni riga lista di celle
+            self._row = None
+            self._cell = None
+
+        # ── helpers ──
+        def _flush(self, prefix="", block="p"):
+            text = "".join(self._buf).strip()
+            self._buf = []
+            if text:
+                self.out.append((block, prefix + text))
+
+        def _emit_text(self, data):
+            if self._cell is not None:
+                self._cell.append(data)
+            else:
+                self._buf.append(data)
+
+        # ── tag di apertura ──
+        def handle_starttag(self, tag, attrs):
+            if tag in ("strong", "b"):
+                self._emit_text("**")
+            elif tag in ("em", "i"):
+                self._emit_text("_")
+            elif tag == "br":
+                self._emit_text("  \n")
+            elif tag in ("ul", "ol"):
+                self._list_stack.append([tag, 0])
+            elif tag == "li":
+                if self._list_stack:
+                    kind, n = self._list_stack[-1]
+                    indent = "  " * (len(self._list_stack) - 1)
+                    if kind == "ol":
+                        self._list_stack[-1][1] = n + 1
+                        self._buf.append(f"{indent}{n + 1}. ")
+                    else:
+                        self._buf.append(f"{indent}- ")
+            elif tag == "table":
+                self._table = []
+            elif tag == "tr":
+                self._row = []
+            elif tag in ("td", "th"):
+                self._cell = []
+            elif tag == "a":
+                d = dict(attrs)
+                self._href = d.get("href", "")
+                self._emit_text("[")
+            elif tag == "img":
+                d = dict(attrs)
+                alt = d.get("alt", "")
+                self._emit_text(f"![{alt}]({d.get('src', '')})")
+            elif tag == "pre":
+                self._in_pre = True
+                self._buf.append("```\n")
+
+        # ── tag di chiusura ──
+        def handle_endtag(self, tag):
+            if tag in ("strong", "b"):
+                self._emit_text("**")
+            elif tag in ("em", "i"):
+                self._emit_text("_")
+            elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+                level = int(tag[1])
+                self._flush(prefix="#" * level + " ", block="h")
+            elif tag == "p":
+                self._flush()
+            elif tag == "li":
+                self._flush(block="li")
+            elif tag in ("ul", "ol"):
+                if self._list_stack:
+                    self._list_stack.pop()
+            elif tag == "a":
+                self._emit_text(f"]({getattr(self, '_href', '')})")
+            elif tag == "pre":
+                self._buf.append("\n```")
+                self._in_pre = False
+                self._flush()
+            elif tag in ("td", "th"):
+                if self._row is not None and self._cell is not None:
+                    self._row.append("".join(self._cell).strip())
+                self._cell = None
+            elif tag == "tr":
+                if self._table is not None and self._row is not None:
+                    self._table.append(self._row)
+                self._row = None
+            elif tag == "table":
+                self._emit_table()
+                self._table = None
+
+        def handle_data(self, data):
+            if not data:
+                return
+            if not self._in_pre:
+                # comprime spazi/newline interni (HTML li ignora)
+                data = re.sub(r"\s+", " ", data)
+                if data == " " and (not self._buf or self._buf[-1].endswith(" ")):
+                    return
+            self._emit_text(data)
+
+        def _emit_table(self):
+            if not self._table:
+                return
+            rows = self._table
+            header = rows[0]
+            ncol = max(len(r) for r in rows)
+            def _row(cells):
+                cells = cells + [""] * (ncol - len(cells))
+                return "| " + " | ".join(c.replace("\n", " ") for c in cells) + " |"
+            self.out.append(("tr", _row(header)))
+            self.out.append(("tr", "| " + " | ".join(["---"] * ncol) + " |"))
+            for r in rows[1:]:
+                self.out.append(("tr", _row(r)))
+
+    parser = _MdWriter()
+    parser.feed(html)
+    parser._flush()
+
+    # Ricostruzione: li/tr consecutivi senza riga vuota, altri blocchi separati da \n\n
+    lines = []
+    prev_block = None
+    for block, text in parser.out:
+        if block in ("li", "tr") and block == prev_block:
+            lines.append("\n" + text)      # stessa lista/tabella: solo a-capo
+        else:
+            lines.append(("" if not lines else "\n\n") + text)
+        prev_block = block
+    md = unescape("".join(lines))
+    # normalizza eccessi di righe vuote
+    md = re.sub(r"\n{3,}", "\n\n", md).strip() + "\n"
+    return md
+
+
+def md_converter_run_pipeline(file_paths, log, on_done):
+    """Converte ogni .docx della lista in un .md dentro output/md converter/."""
+    import os
+    try:
+        _MDC_OUTPUT.mkdir(parents=True, exist_ok=True)
+        if not file_paths:
+            log("[ERRORE] Nessun file da convertire.", "error")
+            on_done(success=False)
+            return
+
+        log(f"[INFO] Avvio conversione di {len(file_paths)} file", "info")
+        log(f"[INFO] Cartella output: {_MDC_OUTPUT}", "info")
+        ok = err = skip = 0
+
+        for fp in file_paths:
+            src = Path(fp)
+            if not src.exists():
+                log(f"[SKIP] File non trovato: {src.name}", "warn")
+                skip += 1
+                continue
+            if src.suffix.lower() != ".docx":
+                log(f"[SKIP] Non è un .docx: {src.name}", "warn")
+                skip += 1
+                continue
+            try:
+                md = _docx_to_markdown(src)
+                dst = _MDC_OUTPUT / (src.stem + ".md")
+                dst.write_text(md, encoding="utf-8")
+                log(f"[OK] {src.name}  →  {dst.name}", "ok")
+                ok += 1
+            except Exception as e:
+                log(f"[ERRORE] {src.name} — {e}", "error")
+                err += 1
+
+        log("\n── Riepilogo ──", "info")
+        log(f"[INFO] Convertiti: {ok}  |  Errori: {err}  |  Saltati: {skip}", "info")
+        if ok:
+            log(f"\n[OK] Fatto! File .md in: {_MDC_OUTPUT}", "ok")
+            try:
+                os.startfile(str(_MDC_OUTPUT))
+            except Exception:
+                pass
+        on_done(success=err == 0 and ok > 0)
+    except Exception as e:
+        log(f"[ERRORE] {e}", "error")
+        on_done(success=False)
+
+
+class MdConverterPanel(tk.Frame):
+
+    def __init__(self, master):
+        super().__init__(master, bg=BG)
+        self._running   = False
+        self._files: list = []
+        self._build_ui()
+        self._load_files()
+        self._update_btn_state()
+        self._poll_log()
+
+    def _build_ui(self):
+        self._status_var = tk.StringVar(value="Pronto.")
+
+        body = tk.Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
+        body.pack(fill="both", expand=True, padx=20, pady=(16, 0))
+
+        paned = tk.PanedWindow(body, orient="vertical", bg=BORDER,
+                               sashwidth=5, sashrelief="flat", bd=0)
+        paned.pack(fill="both", expand=True)
+
+        # ── Pannello superiore: lista file ────────────────────────────────
+        top = tk.Frame(paned, bg=BG_CARD, bd=0, highlightthickness=1,
+                       highlightbackground=BORDER)
+
+        hdr = tk.Frame(top, bg=BG_CARD)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="FILE WORD", bg=BG_CARD, fg=TEXT_SEC,
+                 font=FONT_MONO_BOLD, pady=10, padx=14).pack(side="left")
+
+        self._make_icon_btn(hdr, "🗑", self._remove_all, ERROR_C).pack(side="right", padx=(0, 4))
+        self._btn = self._make_icon_btn(hdr, "▶", self._start, ACCENT)
+        self._btn.pack(side="right", padx=(0, 8))
+        tk.Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        # ── Drop zone drag & drop ─────────────────────────────────────────
+        dz_body = tk.Frame(top, bg=BG_CARD)
+        dz_body.pack(fill="x", padx=8, pady=(6, 2))
+        drop_zone = tk.Label(dz_body,
+                             text="📂  Trascina qui uno o più file Word (.docx)",
+                             bg=BG_INPUT, fg=TEXT_SEC, font=FONT_MONO,
+                             pady=10, cursor="hand2",
+                             highlightthickness=1, highlightbackground=BORDER)
+        drop_zone.pack(fill="x")
+        drop_zone.bind("<Button-1>", lambda e: self._browse_files())
+        drop_zone.bind("<Enter>", lambda e: drop_zone.configure(highlightbackground=ACCENT))
+        drop_zone.bind("<Leave>", lambda e: drop_zone.configure(highlightbackground=BORDER))
+        if _HAS_DND:
+            try:
+                drop_zone.drop_target_register(_DND_FILES)
+                drop_zone.dnd_bind("<<Drop>>", self._on_dnd_drop)
+            except Exception:
+                pass
+
+        # Canvas scrollabile
+        canvas_frame = tk.Frame(top, bg=BG_CARD)
+        canvas_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        self._mdc_vsb = ttk.Scrollbar(canvas_frame, style="Dark.Vertical.TScrollbar")
+        self._mdc_vsb.pack(side="right", fill="y")
+        self._mdc_canvas = tk.Canvas(canvas_frame, bg=BG_CARD,
+                                     highlightthickness=0,
+                                     yscrollcommand=self._mdc_vsb.set)
+        self._mdc_canvas.pack(side="left", fill="both", expand=True)
+        self._mdc_vsb.config(command=self._mdc_canvas.yview)
+        self._mdc_inner = tk.Frame(self._mdc_canvas, bg=BG_CARD)
+        self._mdc_win = self._mdc_canvas.create_window(
+            (0, 0), window=self._mdc_inner, anchor="nw")
+        self._mdc_inner.bind("<Configure>", self._mdc_update_scroll)
+        self._mdc_canvas.bind("<Configure>", lambda e: (
+            self._mdc_canvas.itemconfig(self._mdc_win, width=e.width),
+            self._mdc_update_scroll()
+        ))
+        self._mdc_canvas.bind("<Enter>", lambda e: self._mdc_canvas.bind_all(
+            "<MouseWheel>", lambda ev: self._mdc_canvas.yview_scroll(
+                -1*(ev.delta//120), "units")))
+        self._mdc_canvas.bind("<Leave>", lambda e: self._mdc_canvas.unbind_all("<MouseWheel>"))
+
+        paned.add(top, minsize=80, height=180, stretch="never")
+
+        # ── Pannello inferiore: log ───────────────────────────────────────
+        bottom = tk.Frame(paned, bg=BG_CARD, bd=0, highlightthickness=1,
+                          highlightbackground=BORDER)
+        self._build_log_panel(bottom)
+        paned.add(bottom, minsize=100, stretch="always")
+
+        # ── Status bar ────────────────────────────────────────────────────
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=20, side="bottom")
+        tk.Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
+                 font=FONT_MONO, anchor="w", pady=5).pack(fill="x", padx=20, side="bottom")
+
+    # ── Helpers UI ────────────────────────────────────────────────────────
+
+    def _make_icon_btn(self, parent, symbol, command, color):
+        lbl = tk.Label(parent, text=symbol, bg=BG_CARD, fg=color,
+                       font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
+        lbl.bind("<Button-1>", lambda e: command())
+        lbl.bind("<Enter>", lambda e: lbl.configure(bg=BG_HOVER))
+        lbl.bind("<Leave>", lambda e: lbl.configure(bg=BG_CARD))
+        return lbl
+
+    def _build_log_panel(self, parent):
+        self._log_queue = __import__("queue").Queue()
+        hdr = tk.Frame(parent, bg=BG_CARD)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="OUTPUT LOG", bg=BG_CARD, fg=TEXT_SEC,
+                 font=FONT_MONO_BOLD, pady=10, padx=14).pack(side="left")
+        icon = tk.Label(hdr, text="🗑", bg=BG_CARD, fg=TEXT_SEC,
+                        font=("Consolas", 11), cursor="hand2", padx=10)
+        icon.bind("<Button-1>", lambda e: self._clear_log())
+        icon.bind("<Enter>", lambda e: icon.configure(fg=ERROR_C))
+        icon.bind("<Leave>", lambda e: icon.configure(fg=TEXT_SEC))
+        icon.pack(side="right")
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        lf = tk.Frame(parent, bg=BG_CARD)
+        lf.pack(fill="both", expand=True, padx=4, pady=4)
+        log_vsb = ttk.Scrollbar(lf, style="Dark.Vertical.TScrollbar")
+        log_vsb.pack(side="right", fill="y")
+        self._log_box = tk.Text(
+            lf, bg=BG_CARD, fg=TEXT_PRI, font=FONT_MONO,
+            insertbackground=ACCENT, relief="flat", bd=0,
+            yscrollcommand=log_vsb.set, state="disabled",
+            wrap="word", padx=10, pady=6)
+        self._log_box.pack(side="left", fill="both", expand=True)
+        log_vsb.config(command=self._log_box.yview)
+        self._log_box.tag_configure("ok",    foreground=SUCCESS)
+        self._log_box.tag_configure("error", foreground=ERROR_C)
+        self._log_box.tag_configure("warn",  foreground=WARNING)
+        self._log_box.tag_configure("info",  foreground=TEXT_SEC)
+
+    def _clear_log(self):
+        self._log_box.configure(state="normal")
+        self._log_box.delete("1.0", "end")
+        self._log_box.configure(state="disabled")
+
+    def _enqueue_log(self, message: str, level: str = "info"):
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stripped = message.lstrip("\n")
+        prefix = message[: len(message) - len(stripped)]
+        if stripped:
+            self._log_queue.put((f"{prefix}[{ts}] {stripped}", level))
+        else:
+            self._log_queue.put((message, level))
+
+    def _poll_log(self):
+        import queue as _q
+        try:
+            while True:
+                msg, level = self._log_queue.get_nowait()
+                self._log_box.configure(state="normal")
+                self._log_box.insert("end", msg + "\n", level)
+                self._log_box.see("end")
+                self._log_box.configure(state="disabled")
+        except _q.Empty:
+            pass
+        self.after(80, self._poll_log)
+
+    def _mdc_update_scroll(self, _e=None):
+        self._mdc_canvas.update_idletasks()
+        content_h = self._mdc_inner.winfo_reqheight()
+        canvas_h  = self._mdc_canvas.winfo_height()
+        if content_h > canvas_h:
+            if not self._mdc_vsb.winfo_ismapped():
+                self._mdc_vsb.pack(side="right", fill="y")
+            self._mdc_canvas.configure(scrollregion=(0, 0, 0, content_h))
+        else:
+            if self._mdc_vsb.winfo_ismapped():
+                self._mdc_vsb.pack_forget()
+            self._mdc_canvas.configure(scrollregion=(0, 0, 0, canvas_h))
+            self._mdc_canvas.yview_moveto(0)
+
+    def _update_btn_state(self):
+        has = bool(self._files)
+        self._btn.configure(fg=ACCENT if has else TEXT_SEC,
+                            cursor="hand2" if has else "arrow")
+
+    # ── Lista file ────────────────────────────────────────────────────────
+
+    def _load_files(self):
+        self._files = _mdc_load_files()
+        self._render_rows()
+
+    def _render_rows(self):
+        for w in self._mdc_inner.winfo_children():
+            w.destroy()
+        for path in self._files:
+            row = tk.Frame(self._mdc_inner, bg=BG_CARD)
+            row.pack(fill="x", padx=6, pady=1)
+            x_lbl = tk.Label(row, text="✕", bg=BG_CARD, fg=ERROR_C,
+                             font=("Consolas", 10, "bold"), cursor="hand2",
+                             padx=8, pady=4)
+            x_lbl.pack(side="left")
+            x_lbl.bind("<Button-1>", lambda e, p=path: self._remove_file(p))
+            x_lbl.bind("<Enter>", lambda e, l=x_lbl: l.configure(bg=BG_HOVER))
+            x_lbl.bind("<Leave>", lambda e, l=x_lbl: l.configure(bg=BG_CARD))
+            tk.Label(row, text=path, bg=BG_CARD, fg=TEXT_PRI,
+                     font=FONT_MONO, anchor="w", pady=4).pack(
+                     side="left", fill="x", expand=True)
+            tk.Frame(self._mdc_inner, bg=BORDER, height=1).pack(fill="x", padx=6)
+        self._update_btn_state()
+        self._mdc_update_scroll()
+
+    def _save_files(self):
+        try:
+            _MDC_TXT.parent.mkdir(parents=True, exist_ok=True)
+            _MDC_TXT.write_text("\n".join(self._files), encoding="utf-8")
+            self._status_var.set("✓ files.txt salvato.")
+        except Exception as e:
+            messagebox.showerror("Errore salvataggio", str(e))
+
+    def _remove_file(self, path: str):
+        if path in self._files:
+            self._files.remove(path)
+            self._render_rows()
+            self._save_files()
+
+    def _remove_all(self):
+        if not self._files:
+            return
+        if not messagebox.askyesno("Rimuovi tutto",
+                                   "Rimuovere tutti i file dalla lista?"):
+            return
+        self._files.clear()
+        self._render_rows()
+        self._save_files()
+
+    @staticmethod
+    def _norm(path: str) -> str:
+        """Chiave per confronto duplicati: path assoluto, normalizzato e
+        case-insensitive su Windows."""
+        import os
+        return os.path.normcase(os.path.abspath(path.strip()))
+
+    def _browse_files(self):
+        paths = filedialog.askopenfilenames(
+            title="Seleziona file Word",
+            filetypes=[("Word", "*.docx"), ("Tutti i file", "*.*")])
+        if not paths:
+            return
+        existing = {self._norm(p) for p in self._files}
+        added, bad_exts, dupes = [], [], []
+        for p in paths:
+            if Path(p).suffix.lower() not in _MDC_EXT:
+                bad_exts.append(Path(p).suffix.lower() or "(nessuna estensione)")
+            elif self._norm(p) in existing:
+                dupes.append(p)
+            else:
+                added.append(p)
+                existing.add(self._norm(p))
+
+        if added:
+            self._files.extend(added)
+            self._render_rows()
+            self._save_files()
+        self._status_var.set(self._drop_status_msg(added, [], bad_exts, dupes))
+
+    def _drop_status_msg(self, added, folders, bad_exts, dupes):
+        """Compone il messaggio per la status bar dopo drop/selezione."""
+        parts = []
+        if added:
+            parts.append(f"✓ {len(added)} file aggiunto/i")
+        if bad_exts:
+            uniq = ", ".join(sorted(set(bad_exts)))
+            etichetta = "Formato" if len(set(bad_exts)) == 1 else "Formati"
+            parts.append(f"⚠ {etichetta} {uniq} non accettato/i — "
+                         f"accettati: {_MDC_EXT_LABEL}")
+        if folders:
+            parts.append(f"⚠ {len(folders)} cartella/e ignorata/e — "
+                         f"trascina file {_MDC_EXT_LABEL}")
+        if dupes:
+            import os
+            if len(dupes) == 1:
+                parts.append(f"⚠ '{os.path.basename(dupes[0])}' già in lista")
+            else:
+                parts.append(f"⚠ {len(dupes)} file già in lista")
+        if not parts:
+            return "Pronto."
+        return "   ".join(parts)
+
+    def _on_dnd_drop(self, event):
+        import re
+        import os
+        # Percorsi con spazi arrivano tra {}, senza spazi arrivano nudi
+        paths = [(p[0] or p[1]).strip()
+                 for p in re.findall(r'\{([^}]+)\}|(\S+)', event.data)]
+        existing = {self._norm(p) for p in self._files}
+        added, folders, bad_exts, dupes = [], [], [], []
+        for p in paths:
+            if os.path.isdir(p):
+                folders.append(p)
+            elif Path(p).suffix.lower() not in _MDC_EXT:
+                bad_exts.append(Path(p).suffix.lower() or "(nessuna estensione)")
+            elif self._norm(p) in existing:
+                dupes.append(p)
+            else:
+                added.append(p)
+                existing.add(self._norm(p))
+
+        if added:
+            self._files.extend(added)
+            self._render_rows()
+            self._save_files()
+        self._status_var.set(self._drop_status_msg(added, folders, bad_exts, dupes))
+
+    # ── Pipeline ──────────────────────────────────────────────────────────
+
+    def _start(self):
+        if self._running or not self._files:
+            return
+        self._running = True
+        self._btn.configure(fg=TEXT_SEC, cursor="arrow")
+        self._status_var.set("In esecuzione...")
+        threading.Thread(
+            target=md_converter_run_pipeline,
+            args=(list(self._files), self._enqueue_log, self._on_done),
+            daemon=True,
+        ).start()
+
+    def _on_done(self, success: bool):
+        self._running = False
+        self._btn.configure(fg=ACCENT, cursor="hand2")
+        self._status_var.set("✓ Completato." if success else "✗ Terminato con errori.")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # LAUNCHER PRINCIPALE
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -838,14 +1393,14 @@ def _setup_combo_style():
           selectbackground=[("readonly", BG_CARD)])
 
 
-class AzdoTool(tk.Tk):
+class AzdoTool(_TkDnD.Tk if _HAS_DND else tk.Tk):
 
     def __init__(self):
         super().__init__()
         _setup_scrollbar_style()
         _setup_combo_style()
 
-        self.title("DevOps Tool - All-in-one")
+        self.title("SalesUp Tool - All-in-one")
         self.configure(bg=_SB_BG)
         self.resizable(True, True)
         self.minsize(860, 560)
@@ -853,7 +1408,7 @@ class AzdoTool(tk.Tk):
         try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "DevOps.Tool.AIO.1")
+                "SalesUp.Tool.AIO.1")
         except Exception:
             pass
 
@@ -941,7 +1496,7 @@ class AzdoTool(tk.Tk):
         logo.pack(pady=13)
         txt = tk.Frame(logo, bg=_SB_BG)
         txt.pack(side="left")
-        tk.Label(txt, text="DevOps", font=("Consolas", 13, "bold"),
+        tk.Label(txt, text="SalesUp", font=("Consolas", 13, "bold"),
                  fg=_SB_ACCENT, bg=_SB_BG).pack(side="left")
         tk.Label(txt, text="|", font=("Consolas", 13),
                  fg=_SB_BORDER, bg=_SB_BG, padx=2).pack(side="left")
@@ -950,17 +1505,53 @@ class AzdoTool(tk.Tk):
 
         tk.Frame(sb, bg=_SB_BORDER, height=1).pack(fill="x")
 
-        # Voci di navigazione
+        # Macro-sezioni collassabili: (id gruppo, icona, label, [(key, icona, label) item])
+        _SB_GROUPS = [
+            ("devops", "🔧", "DEVOPS", [
+                ("branches", "⎇", "Branches"),
+            ]),
+            ("files", "📁", "FILES", [
+                ("mdconverter", "📄", "MD Converter"),
+            ]),
+        ]
+        self._group_frames = {}
+        self._group_hdrs   = {}
+
         nav = tk.Frame(sb, bg=_SB_BG)
         nav.pack(fill="x")
 
-        _NAV_ITEMS = [
-            ("branches", "⎇", "Branches"),
-            # futuri pannelli qui
-        ]
+        def _toggle_group(gid):
+            hdr_f, chev = self._group_hdrs[gid]
+            if self._group_frames[gid].winfo_ismapped():
+                self._group_frames[gid].pack_forget()
+                chev.configure(text="▶")
+            else:
+                self._group_frames[gid].pack(fill="x", after=hdr_f)
+                chev.configure(text="▼")
 
-        for key, icon, label in _NAV_ITEMS:
-            self._make_nav_item(nav, key, icon, label, bg=_SB_ITEM_BG)
+        for gid, gicon, glabel, items in _SB_GROUPS:
+            # Header gruppo
+            hdr_frame = tk.Frame(nav, bg=_SB_BG_SEL, cursor="hand2")
+            hdr_frame.pack(fill="x")
+            tk.Label(hdr_frame, text=gicon, bg=_SB_BG_SEL, fg=_SB_TEXT,
+                     font=("Consolas", 13), padx=6, width=2,
+                     anchor="center").pack(side="left", fill="y")
+            tk.Label(hdr_frame, text=glabel, bg=_SB_BG_SEL, fg=_SB_TEXT,
+                     font=FONT_MONO_BOLD, anchor="w",
+                     pady=8).pack(side="left", fill="x", expand=True)
+            chev_lbl = tk.Label(hdr_frame, text="▼", bg=_SB_BG_SEL, fg=_SB_TEXT,
+                                font=FONT_MONO_SM, padx=8)
+            chev_lbl.pack(side="right")
+            self._group_hdrs[gid] = (hdr_frame, chev_lbl)
+            for w in [hdr_frame] + list(hdr_frame.winfo_children()):
+                w.bind("<Button-1>", lambda e, g=gid: _toggle_group(g))
+
+            # Items del gruppo
+            items_frame = tk.Frame(nav, bg=_SB_ITEM_BG)
+            items_frame.pack(fill="x")
+            self._group_frames[gid] = items_frame
+            for key, icon, label in items:
+                self._make_nav_item(items_frame, key, icon, label, bg=_SB_ITEM_BG)
 
         # Footer sidebar
         tk.Frame(sb, bg=_SB_BORDER, height=1).pack(side="bottom", fill="x")
@@ -988,7 +1579,7 @@ class AzdoTool(tk.Tk):
                        font=FONT_MONO, anchor="w", pady=10)
         lbl.pack(side="left", fill="x", expand=True)
 
-        self._nav_btns[key] = (icon_lbl, lbl, indicator, btn_frame)
+        self._nav_btns[key] = (icon_lbl, lbl, indicator, btn_frame, bg)
 
         def _click(e, k=key):
             self._select(k)
@@ -1015,7 +1606,7 @@ class AzdoTool(tk.Tk):
         self._current_key = key
 
         # Aggiorna aspetto bottoni
-        for k, (icon_lbl, label_lbl, indicator, btn_frame) in self._nav_btns.items():
+        for k, (icon_lbl, label_lbl, indicator, btn_frame, item_bg) in self._nav_btns.items():
             if k == key:
                 indicator.configure(bg=_SB_ACCENT2)
                 for w in (btn_frame, icon_lbl):
@@ -1023,10 +1614,9 @@ class AzdoTool(tk.Tk):
                 icon_lbl.configure(fg=_SB_TEXT_SEL)
                 label_lbl.configure(bg=_SB_BG_SEL, fg=_SB_ACCENT)
             else:
-                bg = _SB_BG if k == "settings" else _SB_ITEM_BG
-                indicator.configure(bg=bg)
+                indicator.configure(bg=item_bg)
                 for w in (btn_frame, icon_lbl, label_lbl):
-                    w.configure(bg=bg)
+                    w.configure(bg=item_bg)
                 icon_lbl.configure(fg=_SB_TEXT)
                 label_lbl.configure(fg=_SB_TEXT)
 
@@ -1038,6 +1628,8 @@ class AzdoTool(tk.Tk):
         if key not in self._frames:
             if key == "branches":
                 frame = BranchesPanel(self._content)
+            elif key == "mdconverter":
+                frame = MdConverterPanel(self._content)
             elif key == "settings":
                 frame = SettingsPanel(self._content)
             else:
@@ -1049,7 +1641,8 @@ class AzdoTool(tk.Tk):
         else:
             self._frames[key].pack(fill="both", expand=True)
 
-        titles = {"branches": "Branches", "settings": "Impostazioni"}
+        titles = {"branches": "Branches", "mdconverter": "MD Converter",
+                  "settings": "Impostazioni"}
         self._hdr_title.configure(text=titles.get(key, key.title()))
 
 

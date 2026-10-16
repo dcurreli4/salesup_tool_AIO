@@ -36,6 +36,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: "DevOps Tool - All-in-one ${{ steps.version.outputs.tag }}"
+          name: "SalesUp Tool - All-in-one ${{ steps.version.outputs.tag }}"
           files: "Salesup Tool - All-In-One.pyw"
           generate_release_notes: true
